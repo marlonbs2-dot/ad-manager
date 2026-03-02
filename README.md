@@ -167,14 +167,37 @@ chown -R www-data:www-data storage logs
 # Dar permissões de escrita para o usuário do IIS/Apache nas pastas storage e logs
 ```
 
-### 8. Acessar o Sistema
+### 8. Instalar APIs (DHCP e Servidor de Impressão)
+
+Para gerenciar o DHCP e Servidores de Impressão a partir da interface web, você deve instalar as APIs (Node.js) em servidores Windows na sua rede (ou no próprio AD se preferir).
+
+**No Servidor Windows de Destino:**
+1. Instale o [Node.js](https://nodejs.org) (versão 18 ou superior).
+2. Copie os scripts correspondentes para o servidor:
+   - Para DHCP: `dhcp-api-service.js` e `.env`
+   - Para Print Server: `print-api-service.js` e `.env`
+3. Instale as dependências executando no PowerShell (dentro da pasta dos arquivos):
+   ```powershell
+   npm install express cors dotenv
+   ```
+4. Edite o arquivo `.env` para configurar a Porta, Usuário/Senha (para DHCP) e a `API_KEY`.
+5. Execute a API:
+   ```powershell
+   node print-api-service.js
+   # ou
+   node dhcp-api-service.js
+   ```
+
+> **Dica Institucional:** Recomendamos configurar as APIs como Serviço do Windows usando o [PM2](https://pm2.keymetrics.io/) ou [NSSM](https://nssm.cc/) para que rodem automaticamente em background.
+
+### 9. Acessar o Sistema
 
 Acesse: `https://admanager.local`
 
 **Primeiro Login:**
 - Use a conta de emergência configurada no `.env`
-- Vá em **Configurações** e configure a conexão com o AD
-- Teste a conexão antes de salvar
+- Vá em **Configurações** e configure a conexão com o AD, as rotas de DHCP e as rotas da API de Impressão.
+- Teste as conexões antes de salvar.
 
 ## 📖 Uso
 
