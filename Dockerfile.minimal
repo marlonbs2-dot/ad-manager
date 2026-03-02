@@ -1,0 +1,65 @@
+# PHP Application Dockerfile - Versão Minimal Otimizada
+FROM php:8.2-fpm-alpine
+
+# Install system dependencies (apenas runtime)
+RUN apk add --no-cache \
+    nginx \
+    supervisor \
+    openssl \
+    ca-certificates
+
+# Install PHP extensions with build deps cleanup
+RUN apk add --no-cache --virtual .build-deps \
+    openldap-dev \
+    && docker-php-ext-install \
+    pdo \
+    pdo_mysql \
+    mysqli \
+    ldap \
+    && apk del .build-deps \
+    && apk add --no-cache libldap
+
+# Set working directory
+WORKDIR /var/www/html
+
+# Copy application files
+COPY . .
+
+# Create required directories and set permissions
+RUN mkdir -p /var/www/html/storage \
+    && mkdir -p /var/www/html/storage/cache \
+    && mkdir -p /var/www/html/storage/sessions \
+    && mkdir -p /var/www/html/storage/logs \
+    && mkdir -p /var/www/html/logs \
+    && mkdir -p /var/log/supervisor \
+    && mkdir -p /var/lib/php/sessions \
+    && chown -R www-data:www-data /var/www/html \
+    && chown -R www-data:www-data /var/lib/php/sessions \
+    && chmod -R 755 /var/www/html \
+    && chmod -R 777 /var/www/html/storage \
+    && chmod -R 777 /var/www/html/logs
+
+# Copy configurations
+COPY docker/nginx.conf /etc/nginx/nginx.conf
+COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/www.conf
+COPY docker/php.ini /usr/local/etc/php/php.ini
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# SSL Configuration - Copy SSL certificates for Nginx
+RUN mkdir -p /etc/nginx/ssl
+COPY docker/ssl/server.crt /etc/nginx/ssl/server.crt
+COPY docker/ssl/server.key /etc/nginx/ssl/server.key
+RUN chmod 644 /etc/nginx/ssl/server.crt && chmod 600 /etc/nginx/ssl/server.key
+
+# SSL Configuration for LDAP
+RUN mkdir -p /etc/ldap
+COPY docker/ldap/ldap.conf /etc/ldap/ldap.conf
+ENV LDAPCONF=/etc/ldap/ldap.conf
+COPY docker/ssl/ad-server.crt /etc/ssl/certs/ad-server.crt
+RUN chmod 644 /etc/ssl/certs/ad-server.crt
+
+# Expose ports
+EXPOSE 80 443
+
+# Start supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

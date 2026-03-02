@@ -1,0 +1,124 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Controllers;
+
+use App\Services\AuthService;
+use App\Security\CSRF;
+use Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
+
+class AuthController
+{
+    private AuthService $authService;
+
+    public function __construct()
+    {
+        $this->authService = new AuthService();
+    }
+
+    public function showLogin(Request $request, Response $response): Response
+    {
+        if (isset($_SESSION['user'])) {
+            return $response
+                ->withHeader('Location', '/dashboard')
+                ->withStatus(302);
+        }
+
+        $csrfToken = CSRF::generateToken();
+        
+        ob_start();
+        include __DIR__ . '/../../views/login.php';
+        $html = ob_get_clean();
+
+        $response->getBody()->write($html);
+        return $response;
+    }
+
+    public function login(Request $request, Response $response): Response
+    {
+        $data = $request->getParsedBody();
+        
+        // Validate CSRF
+        if (!CSRF::validateToken($data['csrf_token'] ?? null)) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Invalid CSRF token'
+            ], 403);
+        }
+
+        $username = $data['username'] ?? '';
+        $password = $data['password'] ?? '';
+        $ip = $this->getClientIp($request);
+
+        if (empty($username) || empty($password)) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => 'Username and password are required'
+            ], 400);
+        }
+
+        try {
+            $user = $this->authService->authenticate($username, $password, $ip);
+
+            if (!$user) {
+                return $this->jsonResponse($response, [
+                    'success' => false,
+                    'message' => 'Invalid credentials or insufficient permissions'
+                ], 401);
+            }
+
+            // Store user in session
+            $_SESSION['user'] = $user;
+            $_SESSION['user_dn'] = $data['user_dn'] ?? '';
+            
+            // Regenerate session ID
+            session_regenerate_id(true);
+
+            return $this->jsonResponse($response, [
+                'success' => true,
+                'message' => 'Login successful',
+                'redirect' => '/dashboard'
+            ]);
+
+        } catch (\Exception $e) {
+            return $this->jsonResponse($response, [
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function logout(Request $request, Response $response): Response
+    {
+        session_destroy();
+        
+        return $response
+            ->withHeader('Location', '/login')
+            ->withStatus(302);
+    }
+
+    private function getClientIp(Request $request): string
+    {
+        $serverParams = $request->getServerParams();
+        
+        if (!empty($serverParams['HTTP_X_FORWARDED_FOR'])) {
+            $ip = explode(',', $serverParams['HTTP_X_FORWARDED_FOR'])[0];
+        } elseif (!empty($serverParams['HTTP_X_REAL_IP'])) {
+            $ip = $serverParams['HTTP_X_REAL_IP'];
+        } else {
+            $ip = $serverParams['REMOTE_ADDR'] ?? '0.0.0.0';
+        }
+
+        return trim($ip);
+    }
+
+    private function jsonResponse(Response $response, array $data, int $status = 200): Response
+    {
+        $response->getBody()->write(json_encode($data));
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withStatus($status);
+    }
+}

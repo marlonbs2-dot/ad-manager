@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+vendor/
+logs/*
+!logs/.gitkeep
+storage/cache/*
+!storage/cache/.gitkeep
+storage/reports/*
+!storage/reports/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
+*.md
+docker-compose.yml
+Dockerfile
+.dockerignore

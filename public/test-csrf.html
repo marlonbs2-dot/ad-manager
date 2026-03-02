@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste CSRF</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        button { padding: 10px 20px; margin: 10px 5px; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Teste de CSRF Token</h1>
+    
+    <div>
+        <button onclick="testGenerate()">1. Gerar Token (GET)</button>
+        <button onclick="testValidate()">2. Validar Token (POST)</button>
+        <button onclick="testLogin()">3. Testar Login Real</button>
+    </div>
+    
+    <h2>Resultado:</h2>
+    <pre id="result">Clique em um botão para testar...</pre>
+    
+    <script>
+        let csrfToken = null;
+        
+        async function testGenerate() {
+            try {
+                const response = await fetch('/test-csrf.php', {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+                
+                const data = await response.json();
+                csrfToken = data.csrf_token;
+                
+                document.getElementById('result').innerHTML = 
+                    '<span class="success">✓ Token gerado com sucesso!</span>\n\n' +
+                    JSON.stringify(data, null, 2);
+                    
+            } catch (error) {
+                document.getElementById('result').innerHTML = 
+                    '<span class="error">✗ Erro: ' + error.message + '</span>';
+            }
+        }
+        
+        async function testValidate() {
+            if (!csrfToken) {
+                alert('Primeiro gere um token clicando no botão 1');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/test-csrf.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({
+                        csrf_token: csrfToken
+                    })
+                });
+                
+                const data = await response.json();
+                
+                const status = data.is_valid ? 
+                    '<span class="success">✓ Token válido!</span>' : 
+                    '<span class="error">✗ Token inválido!</span>';
+                
+                document.getElementById('result').innerHTML = 
+                    status + '\n\n' + JSON.stringify(data, null, 2);
+                    
+            } catch (error) {
+                document.getElementById('result').innerHTML = 
+                    '<span class="error">✗ Erro: ' + error.message + '</span>';
+            }
+        }
+        
+        async function testLogin() {
+            try {
+                // First, get the login page to get CSRF token
+                const loginPageResponse = await fetch('/login', {
+                    credentials: 'same-origin'
+                });
+                
+                const loginHtml = await loginPageResponse.text();
+                
+                // Extract CSRF token from HTML
+                const match = loginHtml.match(/name="csrf_token"\s+value="([^"]+)"/);
+                const loginToken = match ? match[1] : null;
+                
+                if (!loginToken) {
+                    throw new Error('CSRF token não encontrado na página de login');
+                }
+                
+                // Now try to login
+                const loginResponse = await fetch('/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({
+                        username: 'admin',
+                        password: 'admin123',
+                        csrf_token: loginToken
+                    })
+                });
+                
+                const loginData = await loginResponse.json();
+                
+                const status = loginData.success ? 
+                    '<span class="success">✓ Login bem-sucedido!</span>' : 
+                    '<span class="error">✗ Login falhou: ' + loginData.message + '</span>';
+                
+                document.getElementById('result').innerHTML = 
+                    status + '\n\n' +
+                    'Token usado: ' + loginToken + '\n\n' +
+                    JSON.stringify(loginData, null, 2);
+                    
+            } catch (error) {
+                document.getElementById('result').innerHTML = 
+                    '<span class="error">✗ Erro: ' + error.message + '</span>';
+            }
+        }
+    </script>
+</body>
+</html>

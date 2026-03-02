@@ -1,0 +1,305 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Services;
+
+use App\Database\Database;
+use App\LDAP\LDAPConnection;
+use App\Security\Encryption;
+use PDO;
+
+class AuthService
+{
+    private PDO $db;
+    private ADConfigService $adConfig;
+    private AuditService $audit;
+
+    public function __construct()
+    {
+        $this->db = Database::getInstance();
+        $this->adConfig = new ADConfigService();
+        $this->audit = new AuditService();
+    }
+
+    public function authenticate(string $username, string $password, string $ip): ?array
+    {
+        // Check rate limiting
+        if ($this->isRateLimited($username, $ip)) {
+            $this->audit->log($username, 'login_failed', null, $ip, 'failure', [
+                'reason' => 'Rate limited'
+            ]);
+            throw new \RuntimeException('Too many login attempts. Please try again later.');
+        }
+
+        // Try emergency account first
+        $emergencyUser = $this->authenticateEmergency($username, $password);
+        if ($emergencyUser) {
+            $this->recordLoginAttempt($username, $ip, true);
+            $this->updateLastLogin($emergencyUser['id']);
+            $this->audit->log($username, 'login_success', null, $ip, 'success', [
+                'method' => 'emergency_account'
+            ]);
+            return $emergencyUser;
+        }
+
+        // Try AD authentication
+        error_log('=== AD Authentication Start ===');
+        error_log('Username: ' . $username);
+        
+        $config = $this->adConfig->getActiveConfig();
+        if (!$config) {
+            error_log('ERROR: No AD config found');
+            throw new \RuntimeException('AD configuration not found');
+        }
+        
+        error_log('Base DN: ' . $config['base_dn']);
+
+        try {
+            $ldap = new LDAPConnection($config);
+            $ldap->connect();
+            error_log('LDAP connected successfully');
+
+            // Build user DN
+            $userDn = $this->buildUserDn($username, $config['base_dn'], $ldap);
+            error_log('User DN found: ' . ($userDn ?? 'NULL'));
+            
+            if (!$userDn) {
+                error_log('ERROR: User not found in AD');
+                $this->recordLoginAttempt($username, $ip, false);
+                $this->audit->log($username, 'login_failed', null, $ip, 'failure', [
+                    'reason' => 'User not found'
+                ]);
+                return null;
+            }
+
+            // Try to bind with user credentials
+            error_log('Attempting to bind with user credentials...');
+            $ldap->bind($userDn, $password);
+            error_log('Bind successful!');
+
+            // Get user details
+            error_log('Fetching user details...');
+            $userInfo = $ldap->searchOne($userDn, '(objectClass=user)', [
+                'displayName', 'mail', 'sAMAccountName', 'memberOf'
+            ]);
+            error_log('User info retrieved. Keys: ' . implode(', ', array_keys($userInfo)));
+
+            // Determine user role based on OU and groups
+            $role = $this->determineUserRole($userDn, $userInfo, $config);
+            error_log('Final role determined: ' . $role);
+            
+            // Block if user has no permissions
+            if ($role === 'none') {
+                error_log('ERROR: User has no permissions - blocking login');
+                $this->recordLoginAttempt($username, $ip, false);
+                $this->audit->log($username, 'login_failed', $userDn, $ip, 'failure', [
+                    'reason' => 'Insufficient permissions'
+                ]);
+                return null;
+            }
+            
+            error_log('User has role: ' . $role . ' - allowing login');
+
+            // Create or update local user
+            $user = $this->syncUser([
+                'username' => $username,
+                'display_name' => $userInfo['displayname'] ?? $username,
+                'email' => $userInfo['mail'] ?? null,
+                'role' => $role
+            ]);
+
+            $this->recordLoginAttempt($username, $ip, true);
+            $this->updateLastLogin($user['id']);
+            $this->audit->log($username, 'login_success', $userDn, $ip, 'success', [
+                'method' => 'ad_authentication'
+            ]);
+
+            return $user;
+
+        } catch (\Exception $e) {
+            error_log('EXCEPTION during authentication: ' . $e->getMessage());
+            error_log('Exception trace: ' . $e->getTraceAsString());
+            $this->recordLoginAttempt($username, $ip, false);
+            $this->audit->log($username, 'login_failed', null, $ip, 'failure', [
+                'reason' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    private function authenticateEmergency(string $username, string $password): ?array
+    {
+        if ($username !== $_ENV['EMERGENCY_ADMIN_USER']) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE username = ? AND is_emergency_account = 1');
+        $stmt->execute([$username]);
+        $user = $stmt->fetch();
+
+        if (!$user) {
+            return null;
+        }
+
+        if (Encryption::verify($password, $user['password_hash'])) {
+            return $user;
+        }
+
+        return null;
+    }
+
+    private function buildUserDn(string $username, string $baseDn, LDAPConnection $ldap): ?string
+    {
+        $filter = sprintf('(sAMAccountName=%s)', ldap_escape($username, '', LDAP_ESCAPE_FILTER));
+        $result = $ldap->search($baseDn, $filter, ['dn']);
+
+        return $result[0]['dn'] ?? null;
+    }
+
+    private function isInAdminOU(string $userDn, string $adminOu): bool
+    {
+        return stripos($userDn, $adminOu) !== false;
+    }
+
+    private function determineUserRole(string $userDn, array $userInfo, array $config): string
+    {
+        // Debug log
+        error_log('=== Determining User Role ===');
+        error_log('User DN: ' . $userDn);
+        error_log('Admin OU: ' . $config['admin_ou']);
+        
+        // 1. Check if user is in Admin OU - Full access
+        if ($this->isInAdminOU($userDn, $config['admin_ou'])) {
+            error_log('Result: ADMIN (in admin OU)');
+            return 'admin';
+        }
+
+        // 2. Check if user can reset passwords or manage groups - Operator access
+        $memberOf = $userInfo['memberof'] ?? [];
+        if (!is_array($memberOf)) {
+            $memberOf = [$memberOf];
+        }
+
+        error_log('User memberOf count: ' . count($memberOf));
+        foreach ($memberOf as $group) {
+            error_log('User group: ' . $group);
+        }
+
+        // Get groups that can reset passwords from config
+        $resetPasswordGroups = $_ENV['AD_RESET_PASSWORD_GROUPS'] ?? '';
+        $manageGroupsGroups = $_ENV['AD_MANAGE_GROUPS_GROUPS'] ?? '';
+        
+        error_log('Reset password groups from ENV: ' . $resetPasswordGroups);
+        error_log('Manage groups from ENV: ' . $manageGroupsGroups);
+        
+        // Use semicolon (;) as separator because DN contains commas
+        $allowedGroups = array_merge(
+            array_filter(explode(';', $resetPasswordGroups)),
+            array_filter(explode(';', $manageGroupsGroups))
+        );
+
+        error_log('Allowed groups count: ' . count($allowedGroups));
+        foreach ($allowedGroups as $ag) {
+            error_log('Allowed group: ' . trim($ag));
+        }
+
+        // Check if user is member of any allowed group
+        foreach ($memberOf as $group) {
+            foreach ($allowedGroups as $allowedGroup) {
+                $trimmedAllowed = trim($allowedGroup);
+                if (stripos($group, $trimmedAllowed) !== false) {
+                    error_log('MATCH! User group "' . $group . '" contains "' . $trimmedAllowed . '"');
+                    error_log('Result: OPERATOR');
+                    return 'operator';
+                }
+            }
+        }
+
+        // 3. No permissions
+        error_log('Result: NONE (no permissions)');
+        return 'none';
+    }
+
+    private function syncUser(array $userData): array
+    {
+        $stmt = $this->db->prepare('SELECT * FROM users WHERE username = ?');
+        $stmt->execute([$userData['username']]);
+        $existing = $stmt->fetch();
+
+        if ($existing) {
+            $stmt = $this->db->prepare('
+                UPDATE users SET display_name = ?, email = ?, role = ? WHERE id = ?
+            ');
+            $stmt->execute([
+                $userData['display_name'],
+                $userData['email'],
+                $userData['role'],
+                $existing['id']
+            ]);
+            return array_merge($existing, $userData);
+        }
+
+        $stmt = $this->db->prepare('
+            INSERT INTO users (username, display_name, email, role) VALUES (?, ?, ?, ?)
+        ');
+        $stmt->execute([
+            $userData['username'],
+            $userData['display_name'],
+            $userData['email'],
+            $userData['role']
+        ]);
+
+        $userData['id'] = (int) $this->db->lastInsertId();
+        return $userData;
+    }
+
+    private function isRateLimited(string $username, string $ip): bool
+    {
+        $maxAttempts = (int) ($_ENV['RATE_LIMIT_LOGIN'] ?? 5);
+        $window = (int) ($_ENV['RATE_LIMIT_WINDOW'] ?? 300);
+
+        $stmt = $this->db->prepare('
+            SELECT COUNT(*) as attempts FROM login_attempts
+            WHERE (username = ? OR ip_address = ?)
+            AND success = 0
+            AND attempted_at > DATE_SUB(NOW(), INTERVAL ? SECOND)
+        ');
+        $stmt->execute([$username, $ip, $window]);
+        $result = $stmt->fetch();
+
+        return ($result['attempts'] ?? 0) >= $maxAttempts;
+    }
+
+    private function recordLoginAttempt(string $username, string $ip, bool $success): void
+    {
+        $stmt = $this->db->prepare('
+            INSERT INTO login_attempts (username, ip_address, success) VALUES (?, ?, ?)
+        ');
+        $stmt->execute([$username, $ip, (int) $success]);
+
+        // Clean old attempts
+        $this->db->exec('DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 1 DAY)');
+    }
+
+    private function updateLastLogin(int $userId): void
+    {
+        $stmt = $this->db->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
+        $stmt->execute([$userId]);
+    }
+
+    public function createEmergencyAccount(string $username, string $password): void
+    {
+        $stmt = $this->db->prepare('
+            INSERT INTO users (username, display_name, role, is_emergency_account, password_hash)
+            VALUES (?, ?, ?, 1, ?)
+            ON DUPLICATE KEY UPDATE password_hash = VALUES(password_hash)
+        ');
+        $stmt->execute([
+            $username,
+            'Emergency Admin',
+            'admin',
+            Encryption::hash($password)
+        ]);
+    }
+}

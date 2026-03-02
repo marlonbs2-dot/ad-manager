@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - AD Manager</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <script src="/assets/js/theme.js"></script>
+</head>
+<body class="login-page">
+    <div class="login-container">
+        <div class="login-box">
+            <div class="login-header">
+                <svg class="login-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                </svg>
+                <h1>AD Manager</h1>
+                <p>Sistema de Gerenciamento do Active Directory</p>
+            </div>
+
+            <form id="login-form" class="login-form">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                
+                <div class="form-group">
+                    <label for="username">Usuário</label>
+                    <input type="text" id="username" name="username" required autofocus>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Senha</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+
+                <div id="error-message" class="alert alert-error" style="display: none;"></div>
+
+                <button type="submit" class="btn btn-primary btn-block">
+                    <span class="btn-text">Entrar</span>
+                    <span class="btn-loader" style="display: none;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <circle cx="12" cy="12" r="10" stroke-dasharray="60" stroke-dashoffset="0">
+                                <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/>
+                            </circle>
+                        </svg>
+                    </span>
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <button id="theme-toggle" class="btn-text">
+                    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <circle cx="12" cy="12" r="5"/>
+                        <line x1="12" y1="1" x2="12" y2="3"/>
+                        <line x1="12" y1="21" x2="12" y2="23"/>
+                    </svg>
+                    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                    </svg>
+                    Alternar tema
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/js/app.js"></script>
+    <script src="/assets/js/login.js"></script>
+</body>
+</html>
