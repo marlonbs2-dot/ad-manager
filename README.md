@@ -34,7 +34,38 @@ Sistema completo em PHP 8+ para gerenciamento de usuários e grupos do Active Di
 
 ## 🚀 Instalação
 
-### 1. Clonar/Copiar o Projeto
+### Opção 1: Docker (Recomendado)
+
+O método mais fácil de instalar e gerenciar o AD Manager é usando o Docker.
+
+1. **Clone o repositório:**
+   ```bash
+   git clone https://github.com/marlonbs2-dot/ad-manager.git
+   cd ad-manager
+   ```
+
+2. **Configure as variáveis de ambiente:**
+   ```bash
+   cp .env.docker .env
+   # Edite o .env e configure as credenciais do banco e a Encryption Key
+   nano .env
+   ```
+
+3. **Inicie os containers:**
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. **Acesse o sistema:**
+   Abra `http://localhost` (ou o IP do servidor) e faça login com a conta de emergência configurada no `.env` (`admin` / `admin123` por padrão no docker).
+
+*(Nota: Para instruções completas e uso em Produção no Debian, consulte o `DOCKER-SETUP.md` ou o novo guia detalhado no projeto)*
+
+---
+
+### Opção 2: Instalação Manual
+
+#### 1. Clonar/Copiar o Projeto
 
 ```bash
 cd C:\Users\marlon.borges\CascadeProjects\ad-manager
